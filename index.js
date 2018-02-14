@@ -205,13 +205,22 @@ SubresourceIntegrityPlugin.prototype.replaceAsset = function replaceAsset(
   newAsset = new ReplaceSource(assets[chunkFile]);
 
   depChunkIds.forEach(function replaceMagicMarkers(depChunkId) {
+    var oldHash = hashByChunkId[depChunkId].oldHash;
+    var index = oldSource.indexOf(oldHash);
+    if (index >= 0) {
+      newAsset.replace(
+        index,
+        (index + oldHash.length) - 1,
+        hashByChunkId[depChunkId].newHash);
+    }
+
     magicMarker = makePlaceholder(depChunkId);
     magicMarkerPos = oldSource.indexOf(magicMarker);
     if (magicMarkerPos >= 0) {
       newAsset.replace(
         magicMarkerPos,
         (magicMarkerPos + magicMarker.length) - 1,
-        hashByChunkId[depChunkId]);
+        hashByChunkId[depChunkId].integrity);
     }
   });
 
@@ -235,20 +244,29 @@ SubresourceIntegrityPlugin.prototype.processChunk = function processChunk(
     if (hashByChunkId[childChunk.id]) {
       return [];
     }
-    hashByChunkId[childChunk.id] = true;
+    hashByChunkId[childChunk.id] = { oldHash: childChunk.renderedHash };
 
     childChunk.chunks.forEach(function mapChunk(depChunk) {
       depChunkIds = depChunkIds.concat(recurse(depChunk));
     });
 
     if (childChunk.files.length > 0) {
-      self.warnIfHotUpdate(compilation, assets[childChunk.files[0]].source());
+      var oldFilename = childChunk.files[0];
+      self.warnIfHotUpdate(compilation, assets[oldFilename].source());
       newAsset = self.replaceAsset(
         assets,
         depChunkIds,
         hashByChunkId,
         childChunk.files[0]);
-      hashByChunkId[childChunk.id] = newAsset.integrity;
+      hashByChunkId[childChunk.id].integrity = newAsset.integrity;
+      childChunk.hash = newAsset.integrity.replace(/^.*-/, '').replace(/\s.*%/, '').replace('+', '-').replace('/', '_');
+      childChunk.renderedHash = hashByChunkId[childChunk.id].newHash = childChunk.hash.substr(0, compilation.outputOptions.hashDigestLength);
+
+      var newFilename = oldFilename.replace(hashByChunkId[childChunk.id].oldHash, childChunk.renderedHash);
+      if (newFilename !== oldFilename) {
+        assets[newFilename] = assets[oldFilename];
+        delete assets[oldFilename];
+      }
     }
     return [childChunk.id].concat(depChunkIds);
   }
